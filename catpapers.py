@@ -29,7 +29,7 @@ def apply_wallpaper(path: str) -> bool:
     return subprocess.call(['/usr/bin/feh','--bg-scale',path]) == 0
 
 def main():
-    imagesDir = path.join(os.path.dirname(__file__), './images/')
+    imagesDir = path.normpath(path.join(os.path.dirname(__file__), './images/'))
 
     try:
         posts = get_reddit_posts()
