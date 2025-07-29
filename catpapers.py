@@ -29,7 +29,7 @@ def apply_wallpaper(path: str) -> bool:
     return subprocess.call(['/usr/bin/feh','--bg-scale',path]) == 0
 
 def main():
-    imagesDir = path.abspath('./images/')
+    imagesDir = path.join(os.path.dirname(__file__), './images/')
 
     try:
         posts = get_reddit_posts()
@@ -52,7 +52,6 @@ def main():
 
         imagePath = path.join(imagesDir, file_name)
         if path.exists(imagePath):
-            print('Image already exists! Skipping...')
             continue
 
         found_cat = True
