@@ -14,5 +14,5 @@ To make the wallpaper change periodically, you can use cron to execute this scri
 The following command appends a line to your user crontab that runs catpapers.py every 5 minutes
 
 ```bash
-(crontab -l 2>/dev/null; echo "*/5 * * * * python3 /path/to/catpapers.py") | crontab -
+(crontab -l 2>/dev/null; echo "*/5 * * * * DISPLAY=:0 XAUTHORITY=/home/$(whoami)/.Xauthority python3 /path/to/catpapers.py") | crontab -
 ```
