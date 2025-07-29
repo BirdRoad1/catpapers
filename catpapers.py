@@ -13,6 +13,7 @@ import getpass
 USER_AGENT = 'catpapers/1.0'
 SPI_SETDESKWALLPAPER = 20 # win32 set wallpaper
 system = platform.system()
+DETACHED_PROCESS = 0x00000008 # start detached process on windows
 
 def get_reddit_posts():
     req = Request('https://www.reddit.com/r/cats.json?limit=100', headers={
@@ -48,9 +49,23 @@ def apply_wallpaper(path: str) -> bool:
 
 def schedule():
     if system == 'Windows':
-        print('Not supported')
+        import ctypes
+        
+        python_binary = sys.executable
+        pythonw_binary = path.join(path.dirname(python_binary), 'pythonw.exe')
+        py_cmd = f'"{pythonw_binary}" "{__file__}" bg'
+        
+        cmd = [f'SCHTASKS.EXE', '/CREATE', '/SC', 'MINUTE', '/MO', '20', '/TN', 'CatPapers', '/TR', py_cmd, '/F']
+        
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        result = proc.wait()
+        if result != 0:
+            out, err = proc.communicate()
+            print(f'Failure! {out}{err}')
+            
+        print('Task successfully scheduled!')
     elif system == 'Linux':
-        line_to_add = f'*/30 * * * * DISPLAY=:0 XAUTHORITY=/home/{getpass.getuser()}/.Xauthority python3 {__file__}\n'
+        line_to_add = f'*/20 * * * * DISPLAY=:0 XAUTHORITY=/home/{getpass.getuser()}/.Xauthority python3 {__file__}\n'
 
         crontab_process = subprocess.Popen(['crontab', '-l'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         crontab_process.wait()
@@ -77,6 +92,13 @@ def main():
     if len(sys.argv) == 2:
         if sys.argv[1].lower() == 'schedule':
             schedule()
+        elif sys.argv[1].lower() == 'bg':
+            # re-run this script in the background
+            if system == 'Windows':
+                subprocess.Popen([sys.executable, __file__], creationflags=DETACHED_PROCESS, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.Popen([sys.executable, __file__], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            exit()
         else:
             print('Invalid option')
         return
