@@ -9,32 +9,75 @@ import random
 import platform
 import sys
 import getpass
+import ctypes
 
-USER_AGENT = 'catpapers/1.0'
+# Change these if need be
+X_DISPLAY=':0' # Linux X11 display variable
+IMAGES_PATH = './images/'
+
+class Reddit:
+    USER_AGENT = 'catpapers/1.0'
+
+    @staticmethod
+    def get_reddit_posts():
+        req = Request('https://www.reddit.com/r/cats.json?limit=100', headers={
+            'user-agent': Reddit.USER_AGENT
+        })
+        res = urlopen(req)
+        data = json.loads(res.read())
+        return data['data']['children']
+
+    @staticmethod
+    def download_file(url: str, dest: str):
+        req = Request(url, headers={
+            'user-agent': Reddit.USER_AGENT
+        })
+
+        res = urlopen(req)
+        with open(dest, 'wb') as file:
+            file.write(res.read())
+
+class Scheduler:
+    @staticmethod
+    def schedule_windows(cmd: str):
+        cmd = [f'SCHTASKS.EXE', '/CREATE', '/SC', 'MINUTE', '/MO', '20', '/TN', 'CatPapers', '/TR', cmd, '/F']
+        
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        result = proc.wait()
+        if result != 0:
+            out, err = proc.communicate()
+            raise Exception(out + err)
+    
+    @staticmethod
+    def schedule_linux(cmd: str):
+        line_to_add = f'*/20 * * * * {cmd}'
+
+        crontab_process = subprocess.Popen(['crontab', '-l'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        crontab_process.wait()
+
+        crontab: str = crontab_process.communicate()[0].decode('utf-8')
+        if line_to_add in crontab:
+            raise Exception('Already scheduled')
+        
+        if not crontab.endswith('\n'):
+            crontab += '\n'
+        
+        crontab += line_to_add + '\n'
+
+        create_crontab_proc = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        create_crontab_proc.stdin.write(crontab.encode())
+
+        _, err = create_crontab_proc.communicate()
+        if err:
+            raise Exception(f'Failed to install crontab: {err}')
+
 SPI_SETDESKWALLPAPER = 20 # win32 set wallpaper
-system = platform.system()
 DETACHED_PROCESS = 0x00000008 # start detached process on windows
-
-def get_reddit_posts():
-    req = Request('https://www.reddit.com/r/cats.json?limit=100', headers={
-        'user-agent': USER_AGENT
-    })
-    res = urlopen(req)
-    data = json.loads(res.read())
-    return data['data']['children']
-
-def download_file(url: str, dest: str):
-    req = Request(url, headers={
-        'user-agent': USER_AGENT
-    })
-
-    res = urlopen(req)
-    with open(dest, 'wb') as file:
-        file.write(res.read())
+system = platform.system()
+images_dir = path.normpath(path.join(os.path.dirname(__file__), IMAGES_PATH))
 
 def apply_wallpaper(path: str) -> bool:
     if system == 'Windows':
-        import ctypes
         if not hasattr(ctypes, 'windll'):
             raise Exception('Could not find win32 API')
         
@@ -48,72 +91,52 @@ def apply_wallpaper(path: str) -> bool:
         return False
 
 def schedule():
-    if system == 'Windows':
-        import ctypes
-        
+    if system == 'Windows':       
         python_binary = sys.executable
         pythonw_binary = path.join(path.dirname(python_binary), 'pythonw.exe')
         py_cmd = f'"{pythonw_binary}" "{__file__}" bg'
-        
-        cmd = [f'SCHTASKS.EXE', '/CREATE', '/SC', 'MINUTE', '/MO', '20', '/TN', 'CatPapers', '/TR', py_cmd, '/F']
-        
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        result = proc.wait()
-        if result != 0:
-            out, err = proc.communicate()
-            print(f'Failure! {out}{err}')
-            
-        print('Task successfully scheduled!')
+        try:
+            Scheduler.schedule_windows(py_cmd)
+            print('Task successfully scheduled!')
+        except Exception as err:
+            print(f'Failed to schedule task: {err}')
     elif system == 'Linux':
-        line_to_add = f'*/20 * * * * DISPLAY=:0 XAUTHORITY=/home/{getpass.getuser()}/.Xauthority python3 {__file__}\n'
+        try:
+            Scheduler.schedule_linux(f'DISPLAY={X_DISPLAY} XAUTHORITY=/home/{getpass.getuser()}/.Xauthority python3 {__file__}')
+            print(f'Success! New crontab: {crontab}')
+        except Exception as err:
+            print(f'Failed to create crontab: {err}')
 
-        crontab_process = subprocess.Popen(['crontab', '-l'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        crontab_process.wait()
+def rerun_bg():
+    if system == 'Windows':
+        subprocess.Popen([sys.executable, __file__], creationflags=DETACHED_PROCESS, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.Popen([sys.executable, __file__], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    exit()
 
-        crontab: str = crontab_process.communicate()[0].decode('utf-8')
-        if line_to_add in crontab:
-            print('Already scheduled!')
-            return
-        
-        if not crontab.endswith('\n'):
-            crontab += '\n'
-        
-        crontab += line_to_add
-        # print(crontab.encode())
-        create_crontab_proc = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        create_crontab_proc.stdin.write(crontab.encode())
-        # create_crontab_proc.stdin.close()
-        _, err = create_crontab_proc.communicate()
-        if err:
-            print(f'Failed to install crontab: {err}')
-            return
-        print(f'Success! New crontab: {crontab}')
-def main():
-    if len(sys.argv) == 2:
-        if sys.argv[1].lower() == 'schedule':
-            schedule()
-        elif sys.argv[1].lower() == 'bg':
-            # re-run this script in the background
-            if system == 'Windows':
-                subprocess.Popen([sys.executable, __file__], creationflags=DETACHED_PROCESS, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            else:
-                subprocess.Popen([sys.executable, __file__], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            exit()
-        else:
-            print('Invalid option')
-        return
-    elif len(sys.argv) > 2:
-        print('Invalid usage')
+def is_image(file_name: str) -> bool:
+    return file_name.endswith('png') or file_name.endswith('jpg') or file_name.endswith('jpeg')
+
+
+def apply_local_cat():
+    print('No new cats found! Using existing cat!')
+    
+    if not path.exists(images_dir):
+        print('No cat images stored :(')
         return
     
-    imagesDir = path.normpath(path.join(os.path.dirname(__file__), './images/'))
-
+    imgs = os.listdir(images_dir)
+    if len(imgs) == 0:
+        print('No cat images stored :(')
+        exit(1)
+    
+    file = path.join(images_dir, random.choice(imgs))
     try:
-        posts = get_reddit_posts()
+        apply_wallpaper(file)
     except Exception as err:
-        print(f'Failed to get reddit posts: {err}')
-        return
+        print(f'Failed to apply wallpaper: {err}')
 
+def get_new_cat(posts):
     found_cat = False
     while len(posts) > 0:
         # Find undownloaded cat from Reddit
@@ -123,25 +146,48 @@ def main():
         if post_data['is_video']:
             continue # skip videos
         url: str = post_data['url']
-        if not url.endswith('png') and not url.endswith('jpg') and not url.endswith('.jpeg'):
+        if not is_image(url):
             continue # only png/jpeg
         
         file_name = url.split('/').pop().replace('/','')
 
-        imagePath = path.join(imagesDir, file_name)
+        imagePath = path.join(images_dir, file_name)
         if path.exists(imagePath):
             continue
+        
+        return (url, file_name)
+    return None
 
-        found_cat = True
-        break
+def main():
+    if len(sys.argv) == 2:
+        if sys.argv[1].lower() == 'schedule':
+            schedule()
+        elif sys.argv[1].lower() == 'bg':
+            # re-run this script in the background
+            rerun_bg()
+        else:
+            print('Invalid option')
+        return
+    elif len(sys.argv) > 2:
+        print('Invalid usage')
+        return
+    
+    try:
+        posts = Reddit.get_reddit_posts()
+    except Exception as err:
+        print(f'Failed to get reddit posts: {err}')
+        return
 
-    if found_cat:
-        if not path.exists(imagesDir):
-            os.makedirs(imagesDir)
+    new_cat = get_new_cat(posts)
+    
+    if new_cat != None:
+        (url, imagePath) = new_cat
+        if not path.exists(images_dir):
+            os.makedirs(images_dir)
 
         # Download image
         try:
-            download_file(url, imagePath)
+            Reddit.download_file(url, imagePath)
         except Exception as err:
             print(f'Failed to download image! {err}')
             return
@@ -154,17 +200,7 @@ def main():
         print('Status: ' + str(status))
     else:
         # No cat found, fallback to local files
-        print('No new cats found! Using existing cat!')
-        imgs = os.listdir(imagesDir)
-        if len(imgs) == 0:
-            print('No cat images stored :(')
-            exit(1)
-        
-        file = path.join(imagesDir, random.choice(imgs))
-        try:
-            apply_wallpaper(file)
-        except Exception as err:
-            print(f'Failed to apply wallpaper: {err}')
+        apply_local_cat()
 
 if __name__ == '__main__':
     main()
