@@ -7,9 +7,12 @@ import os
 import subprocess
 import random
 import platform
+import sys
+import getpass
 
 USER_AGENT = 'catpapers/1.0'
 SPI_SETDESKWALLPAPER = 20 # win32 set wallpaper
+system = platform.system()
 
 def get_reddit_posts():
     req = Request('https://www.reddit.com/r/cats.json?limit=100', headers={
@@ -29,7 +32,6 @@ def download_file(url: str, dest: str):
         file.write(res.read())
 
 def apply_wallpaper(path: str) -> bool:
-    system = platform.system()
     if system == 'Windows':
         import ctypes
         if not hasattr(ctypes, 'windll'):
@@ -44,7 +46,44 @@ def apply_wallpaper(path: str) -> bool:
         print('Unknown system')
         return False
 
+def schedule():
+    if system == 'Windows':
+        print('Not supported')
+    elif system == 'Linux':
+        line_to_add = f'*/30 * * * * DISPLAY=:0 XAUTHORITY=/home/{getpass.getuser()}/.Xauthority python3 {__file__}\n'
+
+        crontab_process = subprocess.Popen(['crontab', '-l'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        crontab_process.wait()
+
+        crontab: str = crontab_process.communicate()[0].decode('utf-8')
+        if line_to_add in crontab:
+            print('Already scheduled!')
+            return
+        
+        if not crontab.endswith('\n'):
+            crontab += '\n'
+        
+        crontab += line_to_add
+        # print(crontab.encode())
+        create_crontab_proc = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        create_crontab_proc.stdin.write(crontab.encode())
+        # create_crontab_proc.stdin.close()
+        _, err = create_crontab_proc.communicate()
+        if err:
+            print(f'Failed to install crontab: {err}')
+            return
+        print(f'Success! New crontab: {crontab}')
 def main():
+    if len(sys.argv) == 2:
+        if sys.argv[1].lower() == 'schedule':
+            schedule()
+        else:
+            print('Invalid option')
+        return
+    elif len(sys.argv) > 2:
+        print('Invalid usage')
+        return
+    
     imagesDir = path.normpath(path.join(os.path.dirname(__file__), './images/'))
 
     try:
