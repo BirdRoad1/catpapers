@@ -20,6 +20,7 @@ class Reddit:
 
     @staticmethod
     def get_reddit_posts():
+        """Fetch an array of Reddit posts"""
         req = Request('https://www.reddit.com/r/cats.json?limit=100', headers={
             'user-agent': Reddit.USER_AGENT
         })
@@ -29,6 +30,7 @@ class Reddit:
 
     @staticmethod
     def download_file(url: str, dest: str):
+        """Downloads the file at URL url to the path destination over HTTP"""
         req = Request(url, headers={
             'user-agent': Reddit.USER_AGENT
         })
@@ -40,6 +42,7 @@ class Reddit:
 class Scheduler:
     @staticmethod
     def schedule_windows(cmd: str):
+        """Use Windows task scheduler to schedule a command"""
         cmd = [f'SCHTASKS.EXE', '/CREATE', '/SC', 'MINUTE', '/MO', '20', '/TN', 'CatPapers', '/TR', cmd, '/F']
         
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
@@ -50,6 +53,7 @@ class Scheduler:
     
     @staticmethod
     def schedule_linux(cmd: str):
+        """Use Linux cron to schedule a command"""
         line_to_add = f'*/20 * * * * {cmd}'
 
         crontab_process = subprocess.Popen(['crontab', '-l'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -77,6 +81,7 @@ system = platform.system()
 images_dir = path.normpath(path.join(os.path.dirname(__file__), IMAGES_PATH))
 
 def apply_wallpaper(path: str) -> bool:
+    """Set the desktop background to the image at path"""
     if system == 'Windows':
         if not hasattr(ctypes, 'windll'):
             raise Exception('Could not find win32 API')
@@ -91,6 +96,7 @@ def apply_wallpaper(path: str) -> bool:
         return False
 
 def schedule():
+    """Schedule the current script to run periodically"""
     if system == 'Windows':       
         python_binary = sys.executable
         pythonw_binary = path.join(path.dirname(python_binary), 'pythonw.exe')
@@ -108,6 +114,7 @@ def schedule():
             print(f'Failed to create crontab: {err}')
 
 def rerun_bg():
+    """Re-run this script in the background, detached from the terminal"""
     if system == 'Windows':
         subprocess.Popen([sys.executable, __file__], creationflags=DETACHED_PROCESS, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
@@ -119,6 +126,7 @@ def is_image(file_name: str) -> bool:
 
 
 def apply_local_cat():
+    """Apply a cat wallpaper from locally cached images"""
     print('No new cats found! Using existing cat!')
     
     if not path.exists(images_dir):
@@ -137,6 +145,7 @@ def apply_local_cat():
         print(f'Failed to apply wallpaper: {err}')
 
 def get_new_cat(posts):
+    """Try and find a cat that has not been cached from Reddit posts"""
     found_cat = False
     while len(posts) > 0:
         # Find undownloaded cat from Reddit
