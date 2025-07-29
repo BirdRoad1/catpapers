@@ -6,10 +6,14 @@ import os.path as path
 import os
 import subprocess
 import random
+import platform
+
+USER_AGENT = 'catpapers/1.0'
+SPI_SETDESKWALLPAPER = 20 # win32 set wallpaper
 
 def get_reddit_posts():
     req = Request('https://www.reddit.com/r/cats.json?limit=100', headers={
-        'user-agent': 'catpapers/1.0'
+        'user-agent': USER_AGENT
     })
     res = urlopen(req)
     data = json.loads(res.read())
@@ -17,7 +21,7 @@ def get_reddit_posts():
 
 def download_file(url: str, dest: str):
     req = Request(url, headers={
-        'user-agent': 'catpapers/1.0'
+        'user-agent': USER_AGENT
     })
 
     res = urlopen(req)
@@ -25,8 +29,20 @@ def download_file(url: str, dest: str):
         file.write(res.read())
 
 def apply_wallpaper(path: str) -> bool:
-    print(f'Loaded wallpaper: {path}')
-    return subprocess.call(['/usr/bin/feh','--bg-scale',path]) == 0
+    system = platform.system()
+    if system == 'Windows':
+        import ctypes
+        if not hasattr(ctypes, 'windll'):
+            raise Exception('Could not find win32 API')
+        
+        ctypes.windll.user32.SystemParametersInfoA(SPI_SETDESKWALLPAPER, 0, path.encode(), 0)
+        return True
+    elif system == 'Linux':
+        print(f'Loaded wallpaper: {path}')
+        return subprocess.call(['/usr/bin/feh','--bg-scale',path]) == 0
+    else:
+        print('Unknown system')
+        return False
 
 def main():
     imagesDir = path.normpath(path.join(os.path.dirname(__file__), './images/'))
@@ -39,6 +55,7 @@ def main():
 
     found_cat = False
     while len(posts) > 0:
+        # Find undownloaded cat from Reddit
         post = random.choice(posts)
         posts.remove(post)
         post_data = post['data']
@@ -57,20 +74,11 @@ def main():
         found_cat = True
         break
 
-    if not found_cat:
-        print('No new cats found! Using existing cat!')
-        imgs = os.listdir(imagesDir)
-        if len(imgs) == 0:
-            print('No cat images stored :(')
-            exit(1)
-        
-        file = path.join(imagesDir, random.choice(imgs))
-        apply_wallpaper(file)
-    else:
+    if found_cat:
         if not path.exists(imagesDir):
             os.makedirs(imagesDir)
 
-        # download image
+        # Download image
         try:
             download_file(url, imagePath)
         except Exception as err:
@@ -83,6 +91,19 @@ def main():
         
         status = apply_wallpaper(imagePath)
         print('Status: ' + str(status))
+    else:
+        # No cat found, fallback to local files
+        print('No new cats found! Using existing cat!')
+        imgs = os.listdir(imagesDir)
+        if len(imgs) == 0:
+            print('No cat images stored :(')
+            exit(1)
+        
+        file = path.join(imagesDir, random.choice(imgs))
+        try:
+            apply_wallpaper(file)
+        except Exception as err:
+            print(f'Failed to apply wallpaper: {err}')
 
 if __name__ == '__main__':
     main()
