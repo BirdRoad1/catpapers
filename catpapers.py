@@ -10,20 +10,93 @@ import platform
 import sys
 import getpass
 import ctypes
+import base64
+from http.client import HTTPResponse
+from time import time
+from math import floor
+from typing import Optional
+from uuid import uuid4
+import urllib.parse
 
 # Change these if need be
 X_DISPLAY=':0' # Linux X11 display variable
 IMAGES_PATH = './images/'
+REDDIT_CLIENT_ID = ''
+REDDIT_CLIENT_SECRET = ''
 
 class Reddit:
     USER_AGENT = 'catpapers/1.0'
+    AUTH_FILE = path.join(path.dirname(__file__), "catpapers-auth.json")
+    _token: str = None
+    
+    @staticmethod
+    def _request_token() -> Optional[str]:
+        if Reddit._token != None:
+            return Reddit._token
+        
+        if len(REDDIT_CLIENT_ID) == 0 or len(REDDIT_CLIENT_SECRET) == 0:
+            return None
+        
+        uid = str(uuid4())
+        if path.exists(Reddit.AUTH_FILE):
+            with open(Reddit.AUTH_FILE, 'r') as file:
+                data = json.loads(file.read())
+                uid = data['uid']
+                if data['expires'] > floor(time()) - 20:
+                    print('Found cached token!')
+                    token = data['access_token']
+                    Reddit._token = token
+                    return token
+                
+        url = 'https://www.reddit.com/api/v1/access_token'
+        data = f'grant_type=client_credentials&device_id={uid}'.encode('utf-8')
+        
+        req = Request(url=url, headers={
+            'user-agent': Reddit.USER_AGENT,
+            'authorization': 'Basic ' + base64.b64encode(f'{REDDIT_CLIENT_ID}:{REDDIT_CLIENT_SECRET}'.encode('utf-8')).decode('utf-8')
+        }, data=data)
+        
+        res: HTTPResponse = urlopen(req)
+        data = json.loads(res.read())
+        if hasattr(data, 'access_token'):
+            print('No access_token received from Reddit!')
+            return None
+        
+        expires = floor(time() + data['expires_in'])
+        token = data['access_token']
+        
+        Reddit._token = token
+        
+        auth_data = {
+            'access_token': token,
+            'expires': expires,
+            'uid': uid
+        }
+        
+        with open(Reddit.AUTH_FILE, 'w') as file:
+            file.write(json.dumps(auth_data))
+        
+        print('Received new token!')
+        return token
+
+    @staticmethod
+    def _get_headers(auth: bool = True):
+        headers = {
+            'user-agent': Reddit.USER_AGENT,
+        }
+        
+        if auth:
+            token = Reddit._request_token()
+            if token != None:
+                headers['authorization'] = f'Bearer {token}'
+
+        return headers
 
     @staticmethod
     def get_reddit_posts():
         """Fetch an array of Reddit posts"""
-        req = Request('https://www.reddit.com/r/cats.json?limit=100', headers={
-            'user-agent': Reddit.USER_AGENT
-        })
+        
+        req = Request('https://oauth.reddit.com/r/cats.json?limit=100', headers=Reddit._get_headers())
         res = urlopen(req)
         data = json.loads(res.read())
         return data['data']['children']
@@ -31,10 +104,13 @@ class Reddit:
     @staticmethod
     def download_file(url: str, dest: str):
         """Downloads the file at URL url to the path destination over HTTP"""
-        req = Request(url, headers={
-            'user-agent': Reddit.USER_AGENT
-        })
-
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != 'http' and parsed.scheme != 'https':
+            raise Exception('URL must be http(s)')
+        
+        is_reddit_url = parsed.hostname == 'i.redd.it' and parsed.scheme == 'https'
+        
+        req = Request(url, headers=Reddit._get_headers(auth=is_reddit_url))
         res = urlopen(req)
         with open(dest, 'wb') as file:
             file.write(res.read())
@@ -45,7 +121,7 @@ class Scheduler:
         """Use Windows task scheduler to schedule a command"""
         cmd = [f'SCHTASKS.EXE', '/CREATE', '/SC', 'MINUTE', '/MO', '20', '/TN', 'CatPapers', '/TR', cmd, '/F']
         
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        oc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         result = proc.wait()
         if result != 0:
             out, err = proc.communicate()
@@ -164,7 +240,7 @@ def get_new_cat(posts):
         if path.exists(imagePath):
             continue
         
-        return (url, file_name)
+        return (url, imagePath)
     return None
 
 def main():
