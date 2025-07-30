@@ -202,9 +202,7 @@ def is_image(file_name: str) -> bool:
 
 
 def apply_local_cat():
-    """Apply a cat wallpaper from locally cached images"""
-    print('No new cats found! Using existing cat!')
-    
+    """Apply a cat wallpaper from locally cached images"""    
     if not path.exists(images_dir):
         print('No cat images stored :(')
         return
@@ -266,25 +264,29 @@ def main():
     new_cat = get_new_cat(posts)
     
     if new_cat != None:
-        (url, imagePath) = new_cat
+        (url, image_path) = new_cat
         if not path.exists(images_dir):
             os.makedirs(images_dir)
 
         # Download image
         try:
-            Reddit.download_file(url, imagePath)
+            Reddit.download_file(url, image_path)
         except Exception as err:
             print(f'Failed to download image! {err}')
+            print('Falling back to cached cat images')
+            apply_local_cat()
             return
 
-        if not path.exists(imagePath):
-            print('Downloaded image does not exist')
+        if not path.exists(image_path):
+            print('Downloaded image does not exist! Using cached cat images instead')
+            apply_local_cat()
             return
         
-        status = apply_wallpaper(imagePath)
+        status = apply_wallpaper(image_path)
         print('Status: ' + str(status))
     else:
         # No cat found, fallback to local files
+        print('No new cats found! Using existing cat!')
         apply_local_cat()
 
 if __name__ == '__main__':
