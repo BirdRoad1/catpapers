@@ -19,14 +19,16 @@ from uuid import uuid4
 import urllib.parse
 
 # Change these if need be
-X_DISPLAY=':0' # Linux X11 display variable
+X_DISPLAY=':0' # Linux X11 DISPLAY variable
+X_XAUTHORITY=f'/home/{getpass.getuser()}/.Xauthority' # Linux X11 XAUTHORITY variable
 IMAGES_PATH = './images/'
 REDDIT_CLIENT_ID = ''
 REDDIT_CLIENT_SECRET = ''
+REDDIT_STORE_AUTH = True # Save Reddit authorization token to catpapers-auth.json
 
 class Reddit:
     _USER_AGENT = 'catpapers/1.0'
-    _AUTH_FILE = path.join(path.dirname(__file__), "catpapers-auth.json")
+    _AUTH_FILE = path.join(path.dirname(__file__), ".catpapers-auth.json")
     _SHOULD_AUTH = REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET
     _token: str = None
     
@@ -39,7 +41,7 @@ class Reddit:
             return None
         
         uid = str(uuid4())
-        if path.exists(Reddit._AUTH_FILE):
+        if REDDIT_STORE_AUTH and path.exists(Reddit._AUTH_FILE):
             with open(Reddit._AUTH_FILE, 'r') as file:
                 data = json.loads(file.read())
                 uid = data['uid']
@@ -68,14 +70,15 @@ class Reddit:
         
         Reddit._token = token
         
-        auth_data = {
-            'access_token': token,
-            'expires': expires,
-            'uid': uid
-        }
-        
-        with open(Reddit._AUTH_FILE, 'w') as file:
-            file.write(json.dumps(auth_data))
+        if REDDIT_STORE_AUTH:
+            auth_data = {
+                'access_token': token,
+                'expires': expires,
+                'uid': uid
+            }
+            
+            with open(Reddit._AUTH_FILE, 'w') as file:
+                file.write(json.dumps(auth_data))
         
         print('Received new token!')
         return token
@@ -125,39 +128,80 @@ class Reddit:
 
 class Scheduler:
     @staticmethod
-    def schedule_windows(cmd: str):
+    def schedule_windows(cmd: str, interval: int):
         """Use Windows task scheduler to schedule a command"""
-        cmd = [f'SCHTASKS.EXE', '/CREATE', '/SC', 'MINUTE', '/MO', '20', '/TN', 'CatPapers', '/TR', cmd, '/F']
+        cmd = [f'SCHTASKS.EXE', '/CREATE', '/SC', 'MINUTE', '/MO', str(interval), '/TN', 'CatPapers', '/TR', cmd, '/F']
         
-        oc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        result = proc.wait()
-        if result != 0:
-            out, err = proc.communicate()
-            raise Exception(out + err)
+        if interval < 1 or interval > 1439:
+            raise Exception('Interval minutes must be between 1 and 1439!')
+        
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        out, err = proc.communicate()
+        
+        if proc.returncode != 0:
+            raise Exception(out.decode('utf-8') + err.decode('utf-8'))
     
     @staticmethod
-    def schedule_linux(cmd: str):
+    def schedule_linux(cmd: str, interval: int):
         """Use Linux cron to schedule a command"""
-        line_to_add = f'*/20 * * * * {cmd}'
+        if interval < 1 or interval > 59:
+            raise Exception('Interval minutes must be between 1 and 59!')
+                
+        line_to_add = f'*/{interval} * * * * {cmd}'
 
         crontab_process = subprocess.Popen(['crontab', '-l'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        crontab_process.wait()
 
         crontab: str = crontab_process.communicate()[0].decode('utf-8')
-        if line_to_add in crontab:
-            raise Exception('Already scheduled')
-        
-        if not crontab.endswith('\n'):
+        for line in crontab.splitlines():
+            if cmd in line:
+                raise Exception('Already scheduled')
+                    
+        if not crontab.endswith('\n') and crontab:
             crontab += '\n'
         
         crontab += line_to_add + '\n'
 
         create_crontab_proc = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        create_crontab_proc.stdin.write(crontab.encode())
 
-        _, err = create_crontab_proc.communicate()
+        _, err = create_crontab_proc.communicate(input=crontab.encode())
         if err:
             raise Exception(f'Failed to install crontab: {err}')
+        
+    @staticmethod
+    def unschedule_windows():
+        """Use Windows task scheduler to delete the scheduled task"""
+        cmd = [f'SCHTASKS.EXE', '/DELETE', '/TN', 'CatPapers', '/F']
+                
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate()
+        
+        if proc.returncode != 0:
+            raise Exception(out.decode('utf-8') + err.decode('utf-8'))
+    
+    @staticmethod
+    def unschedule_linux():
+        crontab_process = subprocess.Popen(['crontab', '-l'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        crontab: str = crontab_process.communicate()[0].decode('utf-8')        
+        lines = [x for x in crontab.splitlines() if not __file__ in x]
+        real_lines_cnt = []
+        
+        if not lines:
+            # Delete crontab
+            create_crontab_proc = subprocess.Popen(['crontab', '-r'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            _, err = create_crontab_proc.communicate()
+            err = err.decode('utf-8')
+            if err:
+                raise Exception(f'Could not delete crontab. Output: {err}')
+        else:
+            # Update crontab
+            create_crontab_proc = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            new_crontab = ('\n'.join(lines) + '\n').encode('utf-8')
+            
+            _, err = create_crontab_proc.communicate(input=new_crontab)
+            if err:
+                raise Exception(f'Could not install new crontab. Output: {err}')
 
 SPI_SETDESKWALLPAPER = 20 # win32 set wallpaper
 DETACHED_PROCESS = 0x00000008 # start detached process on windows
@@ -179,23 +223,37 @@ def apply_wallpaper(path: str) -> bool:
         print('Unknown system')
         return False
 
-def schedule():
+def schedule(interval: int = 30):
     """Schedule the current script to run periodically"""
-    if system == 'Windows':       
+    if system == 'Windows':
         python_binary = sys.executable
         pythonw_binary = path.join(path.dirname(python_binary), 'pythonw.exe')
         py_cmd = f'"{pythonw_binary}" "{__file__}" bg'
         try:
-            Scheduler.schedule_windows(py_cmd)
+            Scheduler.schedule_windows(py_cmd, interval)
             print('Task successfully scheduled!')
         except Exception as err:
             print(f'Failed to schedule task: {err}')
     elif system == 'Linux':
         try:
-            Scheduler.schedule_linux(f'DISPLAY={X_DISPLAY} XAUTHORITY=/home/{getpass.getuser()}/.Xauthority python3 {__file__}')
-            print(f'Success! New crontab: {crontab}')
+            Scheduler.schedule_linux(f'DISPLAY={X_DISPLAY} XAUTHORITY={X_XAUTHORITY} python3 {__file__}', interval)
+            print('Successfully updated crontab!')
         except Exception as err:
             print(f'Failed to create crontab: {err}')
+
+def unschedule():
+    if system == 'Windows':
+        try:
+            Scheduler.unschedule_windows()
+            print('Task successfully unscheduled!')
+        except Exception as err:
+            print(f'Failed to unschedule task: {err}')
+    elif system == 'Linux':
+        try:
+            Scheduler.unschedule_linux()
+            print('Successfully updated crontab!')
+        except Exception as err:
+            print(f'Failed to update crontab: {err}')
 
 def rerun_bg():
     """Re-run this script in the background, detached from the terminal"""
@@ -250,10 +308,22 @@ def get_new_cat(posts):
     return None
 
 def main():
-    if len(sys.argv) == 2:
-        if sys.argv[1].lower() == 'schedule':
-            schedule()
-        elif sys.argv[1].lower() == 'bg':
+    if len(sys.argv) >= 2:
+        cmd = sys.argv[1].lower()
+        if cmd == 'schedule':
+            if len(sys.argv) >= 3:
+                try:
+                    interval = int(sys.argv[2])
+                except ValueError:
+                    print('Invalid interval!')
+                    return
+                
+                schedule(interval)
+            else:
+                schedule()
+        elif cmd == 'unschedule':
+            unschedule()
+        elif cmd == 'bg':
             # re-run this script in the background
             rerun_bg()
         else:
