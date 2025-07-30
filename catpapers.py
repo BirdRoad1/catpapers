@@ -25,8 +25,9 @@ REDDIT_CLIENT_ID = ''
 REDDIT_CLIENT_SECRET = ''
 
 class Reddit:
-    USER_AGENT = 'catpapers/1.0'
-    AUTH_FILE = path.join(path.dirname(__file__), "catpapers-auth.json")
+    _USER_AGENT = 'catpapers/1.0'
+    _AUTH_FILE = path.join(path.dirname(__file__), "catpapers-auth.json")
+    _SHOULD_AUTH = REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET
     _token: str = None
     
     @staticmethod
@@ -38,11 +39,11 @@ class Reddit:
             return None
         
         uid = str(uuid4())
-        if path.exists(Reddit.AUTH_FILE):
-            with open(Reddit.AUTH_FILE, 'r') as file:
+        if path.exists(Reddit._AUTH_FILE):
+            with open(Reddit._AUTH_FILE, 'r') as file:
                 data = json.loads(file.read())
                 uid = data['uid']
-                if data['expires'] > floor(time()) - 20:
+                if data['expires'] > floor(time()) + 20:
                     print('Found cached token!')
                     token = data['access_token']
                     Reddit._token = token
@@ -52,13 +53,13 @@ class Reddit:
         data = f'grant_type=client_credentials&device_id={uid}'.encode('utf-8')
         
         req = Request(url=url, headers={
-            'user-agent': Reddit.USER_AGENT,
+            'user-agent': Reddit._USER_AGENT,
             'authorization': 'Basic ' + base64.b64encode(f'{REDDIT_CLIENT_ID}:{REDDIT_CLIENT_SECRET}'.encode('utf-8')).decode('utf-8')
         }, data=data)
         
         res: HTTPResponse = urlopen(req)
         data = json.loads(res.read())
-        if hasattr(data, 'access_token'):
+        if 'access_token' not in data:
             print('No access_token received from Reddit!')
             return None
         
@@ -73,16 +74,16 @@ class Reddit:
             'uid': uid
         }
         
-        with open(Reddit.AUTH_FILE, 'w') as file:
+        with open(Reddit._AUTH_FILE, 'w') as file:
             file.write(json.dumps(auth_data))
         
         print('Received new token!')
         return token
-
+    
     @staticmethod
     def _get_headers(auth: bool = True):
         headers = {
-            'user-agent': Reddit.USER_AGENT,
+            'user-agent': Reddit._USER_AGENT,
         }
         
         if auth:
@@ -93,10 +94,17 @@ class Reddit:
         return headers
 
     @staticmethod
+    def _reddit_request(endpoint: str) -> Request:
+        headers = Reddit._get_headers()
+        hostname = 'oauth.reddit.com' if 'authorization' in headers else 'reddit.com'
+
+        return Request(f'https://{hostname}{endpoint}', headers=headers)
+            
+    @staticmethod
     def get_reddit_posts():
         """Fetch an array of Reddit posts"""
         
-        req = Request('https://oauth.reddit.com/r/cats.json?limit=100', headers=Reddit._get_headers())
+        req = Reddit._reddit_request('/r/cats.json?limit=100')
         res = urlopen(req)
         data = json.loads(res.read())
         return data['data']['children']
